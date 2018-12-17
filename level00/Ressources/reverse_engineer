@@ -1,0 +1,192 @@
+Example Session (from PDF):
+
+	| level00@SnowCrash:~$ su flag00
+	| Password:
+	| Don't forget to launch getflag !
+	| flag00@SnowCrash:~$ getflag
+	| Check flag.Here is your token : ?????????????????
+	| flag00@SnowCrash:~$ su level01
+	| Password:
+	| level01@SnowCrash:~$ _
+
+As we can see, to get our flag from the getflag program, we have to login to
+ the associated flag account. But how does the program know which flag to print
+ to the screen?
+
+	$> nm /bin/getflag
+	[...]
+	08048604 T ft_des
+	         U fwrite@@GLIBC_2.0
+	         U getenv@@GLIBC_2.0
+-->	         U getuid@@GLIBC_2.0
+	08048843 T isLib
+	08048946 T main
+	         U open@@GLIBC_2.0
+	[...]
+	$>
+
+We see that getuid(2) is used, so we can infer that getflag determines the flag
+ by user ID. We can breakpoint on getuid in gdb and try to change the value it
+ returns to that of a flag## user. We can look in /etc/passwd to get the proper
+ IDs:
+
+	$> cat /etc/passwd | grep "flag" | cut -d ':' -f 1,3
+	flag00:3000
+	flag01:3001
+	flag02:3002
+	flag03:3003
+	flag04:3004
+	flag05:3005
+	flag06:3006
+	flag07:3007
+	flag08:3008
+	flag09:3009
+	flag10:3010
+	flag11:3011
+	flag12:3012
+	flag13:3013
+	flag14:3014
+	$>
+
+However, we run into a small problem if we try to debug getflag:
+
+	$> gdb /bin/getflag
+	[...]
+	Reading symbols from /bin/getflag...(no debugging symbols found)...done.
+	(gdb) b getuid
+	Breakpoint 1 at 0x80484b0
+	(gdb) r
+	Starting program: /bin/getflag
+-->	You should not reverse this
+	[Inferior 1 (process 2486) exited with code 01]
+	(gdb)
+
+Two things are wrong with this:
+  1. The PDF did not forbid reverse engineering /bin/getflag
+  2. /bin/getflag didn't say please
+Let's disassemble the binary and see what causes the program to terminate
+ prematurely:
+
+	$> objdump -d -M intel /bin/getflag
+	[...]
+	 08048946 <main>:
+	[...]
+	 8048989:       e8 b2 fb ff ff          call   8048540 <ptrace@plt>
+	 804898e:       85 c0                   test   eax,eax
+	 8048990:       79 16                   jns    80489a8 <main+0x62>
+	 8048992:       c7 04 24 a8 8f 04 08    mov    DWORD PTR [esp],0x8048fa8
+	 8048999:       e8 42 fb ff ff          call   80484e0 <puts@plt>
+ 
+If eax has no sign, the code jumps to the main part of the program. We can infer
+ that this jns is to where we want to go by looking at the data at 0x8048fa8,
+ the address passed to the puts function call:
+
+	$> objdump -s /bin/getflag | grep -A 1 "8048fa8"
+	 8048fa8 596f7520 73686f75 6c64206e 6f742072  You should not r
+	 8048fb8 65766572 73652074 68697300 4c445f50  everse this.LD_P
+
+Looks familiar! So the result of ptrace is used to detect debugging. ptrace(2)
+ returns -1 and error code EPERM if a program is already being traced. gdb uses
+ ptrace to debug programs, so a ptrace call (with PTRACE_TRACEME) will return -1
+ in the eax register.
+
+So we'll breakpoint on the test instruction and manually set the eax register
+ to a non-negative value to see if we can make it to getuid:
+
+	(gdb) b getuid
+	Breakpoint 1 at 0x80484b0
+	(gdb) b *0x804898e
+	Breakpoint 2 at 0x804898e
+	(gdb) r
+	Starting program: /bin/getflag
+
+	Breakpoint 2, 0x0804898e in main ()
+	(gdb) x/i $pc
+	=> 0x804898e <main+72>: test   %eax,%eax
+	(gdb) set $eax = 0
+	(gdb) c
+	Continuing.
+
+	Breakpoint 1, 0xb7ee4cc0 in getuid () from /lib/i386-linux-gnu/libc.so.6
+	(gdb)
+
+EZPZ. Let's finish the getuid function call and set the returned value to
+ flag00's id (3000).
+
+	(gdb) finish
+	Run till exit from #0  0xb7ee4cc0 in getuid () from /lib/i386-linux-gnu/libc.so.6
+	0x08048b02 in main ()
+	(gdb) set $eax = 3000
+	(gdb) c
+	Continuing.
+-->	Check flag.Here is your token : x24ti5gi3x0ol2eh4esiuxias
+	[Inferior 1 (process 2956) exited normally]
+	(gdb)
+
+Success! Now... the whole project revolves around getting flags from this
+ getflag program, and we have the ability to print the flag for every single
+ level--including the bonus levels--from the very first level. So should we
+ spend a month, or potentially much longer, playing this game?
+ 
+ AIN'T NOBODY GOT TIME FOR THAT!
+
+	(gdb) b *0x804898e
+	Breakpoint 1 at 0x804898e
+	(gdb) b *0x8048b02
+	Breakpoint 2 at 0x8048b02
+	(gdb) b *0x8048ead
+	Breakpoint 3 at 0x8048ead
+	(gdb) r
+	Starting program: /bin/getflag
+
+	Breakpoint 1, 0x0804898e in main ()
+	(gdb) set $eax = 0
+	(gdb) c
+	Continuing.
+
+	Breakpoint 2, 0x08048b02 in main ()
+	(gdb) set $eax = 3001
+	(gdb) c
+	Continuing.
+-->	Check flag.Here is your token : f2av5il02puano7naaf6adaaf
+
+	Breakpoint 3, 0x08048ead in main ()
+	(gdb) jump *0x8048b02
+	Continuing at 0x8048b02.
+
+	Breakpoint 2, 0x08048b02 in main ()
+	(gdb) set $eax = 3002
+	(gdb) c
+	Continuing.
+-->	kooda2puivaav1idi4f57q8iq
+
+	[...]
+
+	Breakpoint 2, 0x08048b02 in main ()
+	(gdb) set $eax = 3014
+	(gdb) c
+	Continuing.
+-->	7QiHafiNa3HVozsaXkawuYrTstxbpABHD8CPnHJ
+
+By setting a breakpoint right after getuid, and right before main returns, we
+ can very quickly and easily print out every flag.
+
+RESULTS
+-------
+00: x24ti5gi3x0ol2eh4esiuxias
+01: f2av5il02puano7naaf6adaaf
+02: kooda2puivaav1idi4f57q8iq
+03: qi0maab88jeaj46qoumi7maus
+04: ne2searoevaevoem4ov4ar8ap
+05: viuaaale9huek52boumoomioc
+06: wiok45aaoguiboiki2tuin6ub
+07: fiumuikeil55xe9cu4dood66h
+08: 25749xKZ8L7DkSCwJkT9dyv6f
+09: s5cAJpM8ev6XHw998pRWG728z
+10: feulo4b72j7edeahuete3no7c
+11: fa6v5ateaw21peobuub8ipe6s
+12: g1qKMiRpXf53AWhDaU7FEkczr
+13: 2A31L79asukciNyi8uppkEuSx
+14: 7QiHafiNa3HVozsaXkawuYrTstxbpABHD8CPnHJ
+
+...also wandre never responded...
